@@ -482,7 +482,8 @@
 
 <script>
 'use strict';
-const API = 'http://localhost:8000';
+const API_BASE = 'http://8.156.85.111:8000';       // 资讯、AI聊天、鉴权
+const TRADE_API_BASE = 'http://8.156.85.111:8001'; // 真实资金、持仓
 const CHAT_SK = 'cq_chat_history_v2';
 
 // ══════════════ SIDEBAR ══════════════
@@ -537,7 +538,7 @@ async function loadAccount() {
         const headers = {};
         const tok = localStorage.getItem('cq_token');
         if (tok) headers['Authorization'] = 'Bearer ' + tok;
-        const r = await fetch(`${API}/api/v1/trade/account`, { headers });
+        const r = await fetch(`${TRADE_API_BASE}/api/v1/trade/account`, { headers });
         if (!r.ok) throw new Error(r.status);
         _acctData = await r.json();
         renderAcct(_acctData, _curMkt);
@@ -561,13 +562,40 @@ function renderAcct(data, mkt) {
     const ccy  = { ALL:'CNY', A:'CNH', HK:'HKD', US:'USD' };
     const unit = ccy[mkt] || 'CNY';
 
-    // pick market slice
-    const src = (mkt === 'ALL') ? data : (data.markets || {})[mkt] || {};
-    const total     = src.total_assets ?? data.total_assets_cny ?? 0;
-    const cash      = src.cash ?? 0;
-    const positions_val = src.positions_value ?? (total - cash);
-    const pnl_pct   = src.total_pnl_pct ?? data.total_pnl_pct ?? 0;
+    // 1. 提取所有持仓
+    const allPos = data.positions || [];
+    
+    // 2. 动态计算选中市场的：现金、持仓市值
+    let cash = 0;
+    let positions_val = 0;
+    let filteredPos = [];
 
+    if (mkt === 'ALL') {
+        // 简单加总（实际情况应当涉及汇率换算，这里为纯模拟演示直接相加）
+        cash = (data.cash_cnh || 0) + (data.cash_hkd || 0) + (data.cash_usd || 0);
+        positions_val = allPos.reduce((sum, p) => sum + (p.market_value || 0), 0);
+        filteredPos = allPos;
+    } else {
+        if (mkt === 'A')  cash = data.cash_cnh || 0;
+        if (mkt === 'HK') cash = data.cash_hkd || 0;
+        if (mkt === 'US') cash = data.cash_usd || 0;
+        
+        filteredPos = allPos.filter(p => (p.market_type || '').toUpperCase() === mkt);
+        positions_val = filteredPos.reduce((sum, p) => sum + (p.market_value || 0), 0);
+    }
+
+    // 3. 计算总资产
+    const total = cash + positions_val;
+    
+    // 4. 计算总盈亏百分比 (当前总资产 / 初始资金 - 1)
+    let initFund = 0;
+    if (mkt === 'ALL') initFund = 100000 + 100000 + 10000;
+    if (mkt === 'A')   initFund = 100000;
+    if (mkt === 'HK')  initFund = 100000;
+    if (mkt === 'US')  initFund = 10000;
+    const pnl_pct = initFund > 0 ? ((total - initFund) / initFund * 100) : 0;
+
+    // 渲染上方三大数据块
     grid.innerHTML = `
         <div class="acct-stat">
             <div class="acct-stat-label">总资产 (${unit})</div>
@@ -585,15 +613,13 @@ function renderAcct(data, mkt) {
             <div class="acct-stat-sub">${unit}</div>
         </div>`;
 
-    // positions table
-    const allPos = data.positions || [];
-    const filtered = mkt === 'ALL' ? allPos : allPos.filter(p => (p.market_type||'').toUpperCase() === mkt);
+    // 渲染下方微型持仓列表
     const tbody = document.getElementById('mini-pos-body');
-    if (!filtered.length) {
+    if (!filteredPos.length) {
         tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--text-dim);padding:16px">暂无持仓 · <a href="trade.html" style="color:var(--primary)">去交易</a></td></tr>`;
         return;
     }
-    tbody.innerHTML = filtered.slice(0,6).map(p => {
+    tbody.innerHTML = filteredPos.slice(0,6).map(p => {
         const pnl = p.unrealized_pnl ?? 0;
         return `<tr>
             <td><span class="sym">${p.symbol}</span></td>
@@ -618,7 +644,7 @@ function renderAcctOffline() {
 async function loadNews() {
     const el = document.getElementById('news-list');
     try {
-        const r = await fetch(`${API}/api/v1/market/hotnews`);
+        const r = await fetch(`${API_BASE}/api/v1/market/hotnews`);
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const raw = await r.json();
         // 兼容两种格式: 直接 list 或 {sources:[...]} wrapper
@@ -765,7 +791,7 @@ async function sendChat() {
             }))
         };
 
-        const r = await fetch(`${API}/api/v1/chat/mentor`, {
+        const r = await fetch(`${API_BASE}/api/v1/chat/mentor`, {
             method:'POST', headers, body: JSON.stringify(body)
         });
 
